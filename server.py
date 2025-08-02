@@ -1,14 +1,9 @@
 import os
-import platform
 import random
-import signal
-import subprocess
 import sys
 import time
-import webbrowser
 from datetime import datetime
 from enum import Enum
-from subprocess import PIPE, Popen, call
 from typing import Optional
 
 import yaml
