@@ -183,7 +183,7 @@ modules: null
 
 
 def load_config():
-    config_file = "./server.yaml"
+    config_file = "./config.yaml"
     if not os.path.exists(config_file):
         print("Configuration file server.yaml not found!")
         usage()
