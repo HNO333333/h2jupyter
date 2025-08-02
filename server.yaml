@@ -1,0 +1,32 @@
+# --- ssh
+hostname: hoffman2
+username: username
+sshlogs: false
+
+# --- l options
+timeinhours: 24
+memoryingb: 4
+arch: intel-gold\*
+highp: false
+exclusive: false
+
+# --- pe options
+parenv: shared
+numberofslots: 1
+
+# --- module
+pythonver: python/3.11.12
+gccver: gcc/11.3.0
+mods: ""
+
+# --- GPU
+usegpu: false
+gputype: ""
+cudaver: cuda/11.3
+cudanum: 1
+
+# --- env
+cve: ""
+pve: ""
+port: 8789
+directory: $SCRATCH
