@@ -1,45 +1,84 @@
 import os
-import random
+import queue
 import sys
+import threading
 import time
+from copy import deepcopy
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 
 import yaml
 from fabric2 import Connection
+from loguru import logger as base
+from paramiko import Channel
 from pydantic import BaseModel, Field
+from tqdm import tqdm
 
-from utils import file_logger, get_current_time_str, logger
+# --- global vars
+current_dir = os.path.dirname(os.path.abspath(__file__))
+thread_stop_event = threading.Event()
+remote_host = ""
+# --- logger setting
+base.remove()
 
-random.seed(datetime.now().strftime("%S"))
+logger = deepcopy(base)
+qsub_stdout_logger = deepcopy(base)
+tunnel_stdout_logger = deepcopy(base)
 
-if sys.version_info < (2, 6, 0):
-    sys.stderr.write("You need python 2.6 or later to run this script\n")
-    exit(1)
+logger.add(sys.stdout, level="INFO")
+qsub_stdout_logger.add(
+    sys.stdout,
+    level="INFO",
+    format="{message}",
+)
+tunnel_stdout_logger.add(
+    sys.stdout,
+    level="INFO",
+    format="[tunnel] {message}",
+)
+
+logfile_stream = open(os.path.join(current_dir, "server.log"), "a")
 
 
-def readwhile(session, condition_func, timeout=10):
+# --- helpers
+def get_current_time_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_session_queue(conn: Connection):
+    session = conn.transport.open_session()
+    session.get_pty()
+    session.invoke_shell()
+    q = queue.Queue()
+    return session, q
+
+
+def readwhile(q: queue.Queue, condition_func, timeout=10, verbose=False):
     """
     Read from a stream until a condition is met or a timeout occurs.
     """
     start = time.time()
-
+    flag = False
     while True:
-        flag = False
-        if session.recv_ready():
-            output = session.recv(4096).decode("utf-8")
-            for line in output.split("\n"):
-                file_logger.info(output)
+        try:
+            data: str = q.get(timeout=0.1)
+            for line in data.split("\n"):
+                if verbose:
+                    logger.info(line)
                 if condition_func(line):
                     flag = True
                     break
-        elif timeout:  # set timeout=None to disable timeout
-            if time.time() - start > timeout:
-                raise TimeoutError("No output received for too long.")
-        else:
-            time.sleep(0.1)
-        if flag:
+            if flag:
+                break
+        except queue.Empty:
+            if timeout:
+                if time.time() - start > timeout:
+                    raise TimeoutError("No output received for too long.")
+            else:
+                time.sleep(0.1)
+        except Exception as e:
+            logger.error(e)
             break
     return
 
@@ -147,46 +186,50 @@ class HPCServerConfig(BaseModel):
     pve: Optional[str] = Field(default="", description="Python virtual environment")
     port: int = Field(default=8789, description="Port number for the server")
     directory: str = Field(default="$SCRATCH", description="Working directory path")
-
-    def model_post_init(self, context):
-        pass
+    requirements: str = Field(default="", description="venv requirements")
 
 
-def usage():
-    print("Usage:")
-    print("Create a server.yaml file with the required configuration.")
-    print("See sample configuration below:")
-    print("""
-username: shuhan
-timeinhours: 1
-memoryingb: 4
-parenv: shared # or dc\\*
-numberofslots: 8 # number of computing cores
-port: 8789
-directory: $SCRATCH
-pythonver: python/3.11.12 # can be 
-usegpu: false
-gpu: null
-gpumem: null
-cudaver: "11.3"
-highp: false
-exclusive: false
-arch: null
-mods: null
-cve: null
-pve: null
-sshlogs: false
-gccver: gcc/11.3.0
-modules: null
-""")
-    sys.exit(2)
+def stdout2queue(session: Channel, q: queue.Queue, logger):
+    """
+    centralize stdout of a session
+    """
+    while not thread_stop_event.is_set():
+        if session.recv_ready():
+            data = session.recv(1024).decode("utf-8")
+            data = data.replace("\r\n\r\n", "\n")
+            q.put(data)
+            logger.opt(raw=True).info(data + "\n")
+            logfile_stream.write(data)
+        time.sleep(1)
+
+
+def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
+    try:
+        conn = Connection(host_name)
+        conn.open()
+        logger.info(f"SSH connection to {host_name} established")
+        with conn.forward_local(
+            local_port=local_port, remote_host=remote_host, remote_port=remote_port
+        ):
+            logger.info(
+                f"Port forwarding established: {local_host}:{local_port} -> {remote_host}:{remote_port}"
+            )
+            while not thread_stop_event.is_set():
+                time.sleep(0.2)
+        logger.info("Port forwarding closed")
+    except Exception as e:
+        logger.info(f"Tunnel Error: {e}")
+        raise e
+    finally:
+        conn.close()
+        logger.info("Tunnel connection closed")
+    return
 
 
 def load_config():
-    config_file = "./config.yaml"
+    config_file = os.path.join(current_dir, "config.yaml")
     if not os.path.exists(config_file):
-        print("Configuration file server.yaml not found!")
-        usage()
+        logger.error("Configuration file config.yaml not found!")
         sys.exit(2)
 
     with open(config_file, "r") as f:
@@ -194,33 +237,6 @@ def load_config():
     config = HPCServerConfig(**yaml_str)
 
     return config
-
-
-def get_ssh_args(config: HPCServerConfig):
-    if not config.hostname:
-        dst = f"{config.username}@hoffman2.idre.ucla.edu"
-    else:
-        dst = config.hostname
-
-    ssh_args = [
-        "ssh",
-        "-o",
-        "ServerAliveCountMax=5",
-        "-o",
-        "IPQoS=throughput",
-        "-o",
-        "ServerAliveInterval=30",
-        "-X",
-        "-Y",
-        "-t",
-        "-t",
-        "-4",
-    ]
-    if config.sshlogs:
-        ssh_args.extend(["-E", "myssh.log"])
-
-    ssh_args.append(dst)  # at the end
-    return ssh_args
 
 
 def get_qrsh_cmd(config: HPCServerConfig):
@@ -270,55 +286,217 @@ def get_env_activate_cmd(config: HPCServerConfig):
     return cmd
 
 
+def check_uv_exists(session: Channel, q: queue.Queue):
+    global uv_path
+    session.send("echo UVPATH=`which uv`" + "\n")
+
+    def _helper(line: str):
+        global uv_path
+        uv_path = ""
+        splits = line.split("=")
+        if splits[0] == "UVPATH":
+            if len(splits) == 2 and splits[1].strip():
+                uv_path = splits[1].strip()
+            return True
+        return False
+
+    readwhile(q, _helper, timeout=10)
+    result = uv_path
+    if result:
+        logger.info(f"uv exists at {result}")
+        result = True
+    else:  # try to install
+        session.send("wget -qO- https://astral.sh/uv/install.sh | sh" + "\n")
+        readwhile(q, _helper, timeout=10)
+        if uv_path:
+            logger.info("uv installed")
+            result = True
+        else:
+            raise ValueError(
+                "fail to install uv, try to install manually: wget -qO- https://astral.sh/uv/install.sh | sh"
+            )
+    del uv_path
+    return result
+
+
+def check_hostname(session: Channel, q: queue.Queue):
+    """make sure don't start job on login node"""
+    global remote_host
+
+    def is_hostname(line: str):
+        global remote_host
+        if line.startswith("HOSTNAME"):
+            remote_host = line.split("=")[1].strip()
+            return True
+        else:
+            return False
+
+    session.send("echo HOSTNAME=`hostname`\n")
+    readwhile(q, is_hostname, timeout=30)
+
+    if "login" in remote_host:
+        logger.error(
+            "You are be on the wrong host (login node rather than compute node). Please check your configuration and try again."
+        )
+        raise ValueError("should be compute node")
+    logger.info(f"Connected to {remote_host}")
+    return
+
+
+def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
+    session.send(f"cd {config.directory}\n")
+    session.send("mkdir h2jupyter" + "\n")
+    session.send("cd h2jupyter" + "\n")
+    session.send("uv venv -p 3.11" + "\n")
+    pkgs = config.requirements.split("\n")
+    pkgs.append("pyzmq<27")
+    pkgs.append("jupyter_kernel_gateway")
+    pkgs.append("ipykernel")
+    pkgs = [pkg.strip() for pkg in pkgs if pkg.strip()]
+    for pkg in pkgs:
+        session.send(f"uv pip install '{pkg}'\n")
+    session.send("echo REQ_INSTALLED\n")
+    readwhile(q, lambda line: line.startswith("REQ_INSTALLED"), timeout=1200)
+
+
 def main():
-    config = load_config()
+    global remote_host
+    config: HPCServerConfig = load_config()
 
-    with Connection(config.hostname) as conn:
-        conn.open()
-        session_qsub = conn.transport.open_session()
-        session_qsub.get_pty()
-        session_qsub.invoke_shell()
-        logger.info("login!")
+    conn = Connection(host=config.hostname)
+    conn.open()
 
+    session_qsub, q_qsub = get_session_queue(conn)
+
+    thread_stdout_qsub = threading.Thread(
+        target=stdout2queue, args=(session_qsub, q_qsub, qsub_stdout_logger)
+    )
+    thread_stdout_qsub.start()
+    thread_tunnel = None
+
+    try:
         # --- request compute node
+        logger.info("requesting compute node...")
+        start_time = time.time()
+
         qrsh_cmd = get_qrsh_cmd(config)
-        logger.info(f"qrsh_cmd: {qrsh_cmd}")
+        logger.info(f"cmd to be executed: {qrsh_cmd}")
+
         session_qsub.send(qrsh_cmd + "\n")
         session_qsub.send("echo 'DONE'" + "\n")
-        readwhile(session_qsub, lambda line: line.startswith("DONE"), timeout=None)
-        logger.info("qrsh done!")
+        readwhile(q_qsub, lambda line: line.startswith("DONE"), timeout=None)
+        logger.info(f"qrsh done, time used: {time.time() - start_time:.2f}")
 
-        # load modules
+        # --- check hostname
+        check_hostname(session_qsub, q_qsub)
+
         # --- load modules
         module_load_cmds = get_module_load_cmds(config)
         for cmd in module_load_cmds:
             session_qsub.send(cmd + "\n")
+        # show all modules
+        session_qsub.send("module li" + "\n")
 
         # --- activate env
         env_activate_cmd = get_env_activate_cmd(config)
         if env_activate_cmd:
             session_qsub.send(env_activate_cmd + "\n")
+        check_uv_exists(session_qsub, q_qsub)
 
         # --- open dir
         session_qsub.send(f"cd {config.directory}" + "\n")
         session_qsub.send(f"echo '{get_current_time_str()}' >> temp.txt" + "\n")
 
-        # --- get hostname
-        def is_hostname(line: str):
-            global hostname
-            if line.startswith("HOSTNAME"):
-                hostname = line.split("=")[1].strip()
-                return True
-            else:
-                return False
+        # --- open dir & install requirements
+        cd_create_venv(session_qsub, q_qsub, config)
 
-        session_qsub.send("echo HOSTNAME=`hostname`\n")
-        readwhile(session_qsub, is_hostname, timeout=30)
+        # --- start jupyter kernel gateway
+        session_qsub.send(
+            f"uv run jupyter kernelgateway --KernelGatewayApp.ip=0.0.0.0 --KernelGatewayApp.port={config.port}"
+            + "\n"
+        )
 
-        # --- close all sessions
+        # --- open tunnel
+        local_host = "localhost"
+        thread_tunnel = threading.Thread(
+            target=stream_tunnel,
+            args=(
+                config.hostname,
+                config.port,
+                config.port,
+                local_host,
+                remote_host,
+            ),
+        )
+        thread_tunnel.start()
+
+        # --- show count down
+        start_time = time.time()
+        for _ in tqdm(range(3600 * config.timeinhours, 0, -30)):
+            time.sleep(30)
+
+    except KeyboardInterrupt:
+        logger.error("User interrupted.")
+
+    except Exception as e:
+        logger.error(f"Error: {e}, {str(e.__traceback__)}")
+
+    # --- close all sessions
+    finally:
+        # close all here
+        thread_stop_event.set()
+        thread_stdout_qsub.join()
+        if thread_tunnel:
+            thread_tunnel.join()
         session_qsub.close()
-    logger.info("connection closed.")
+        conn.close()
+        logfile_stream.close()
+        logger.info("all connection closed.")
     return
+
+
+def test():
+    config = load_config()
+
+    conn = Connection(config.hostname)
+    conn.open()
+    session = conn.transport.open_session()
+    session.get_pty()
+    session.invoke_shell()
+
+    q = queue.Queue()
+    stream_thread = threading.Thread(
+        target=stdout2queue,
+        args=(
+            session,
+            q,
+            qsub_stdout_logger,
+        ),
+    )
+    stream_thread.start()
+
+    try:
+        for _ in range(5):
+            session.send("echo 'hello world!'" + "\n")
+            time.sleep(0.1)
+        session.send("echo 'last world!'" + "\n")
+        readwhile(q, lambda line: line.startswith("last"), verbose=False)
+        logger.info("+" * 30)
+        for _ in range(5):
+            session.send("echo 'hihi'" + "\n")
+            time.sleep(0.1)
+        session.send("echo 'last hi!'" + "\n")
+        readwhile(q, lambda line: line.startswith("last"), verbose=False)
+        logger.info("=" * 30)
+    except Exception as e:
+        logger.error(f"Error: {str(e)}. Traceback:\n{e.__traceback__}")
+    finally:
+        thread_stop_event.set()
+        stream_thread.join()
+        session.close()
+        conn.close()
+        logfile_stream.close()
+        logger.info("connection closed.")
 
 
 if __name__ == "__main__":
