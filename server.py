@@ -7,6 +7,7 @@ import time
 from copy import deepcopy
 from datetime import datetime
 from enum import Enum
+import traceback
 from typing import Optional
 
 import yaml
@@ -212,7 +213,7 @@ def stdout2queue(session: Channel, q: queue.Queue, logger):
             q.put(data)
             logger.opt(raw=True).info(data + "\n")
             logfile_stream.write(data)
-        time.sleep(1)
+        time.sleep(0.1)
 
 
 def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
@@ -248,11 +249,12 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
                 if e is None:
                     time.sleep(0.1)
                 else:
-                    logger.error("TunnelManager exception detected.")
+                    e = e.value
+                    logger.error(f"TunnelManager exception detected. {e}")
                     raise e
             logger.info("Tunnel manager closed")
         except Exception as e:
-            logger.error(f"Tunnel Error: {e}\n{e.__traceback__}")
+            logger.error(f"Tunnel Error: {e}\n{traceback.format_exc()}")
             logger.warning(f"Retrying ({retry_count})...")
             retry_count += 1
             time.sleep(1)
@@ -482,7 +484,7 @@ def main():
             time.sleep(5)
 
     except Exception as e:
-        logger.error(f"Error: {e}, {str(e.__traceback__)}")
+        logger.error(f"Error: {e}, {traceback.format_exc()}")
 
     except SystemExit:
         logger.info("capture exit in main...")
