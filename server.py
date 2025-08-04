@@ -410,6 +410,7 @@ def main():
 
     conn = Connection(host=config.hostname)
     conn.open()
+    conn.transport.set_keepalive(30)
 
     session_qsub, q_qsub = get_session_queue(conn)
 

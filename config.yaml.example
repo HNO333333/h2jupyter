@@ -1,7 +1,8 @@
 # --- ssh
 hostname: hoffman2
-username: username
+username: <username>
 sshlogs: false
+usetunnel: true
 
 # --- l options
 timeinhours: 24
@@ -30,3 +31,7 @@ cve: ""
 pve: ""
 port: 8789
 directory: $SCRATCH
+requirements: |-
+    scikit-learn
+    numpy
+    pandas
