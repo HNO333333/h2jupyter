@@ -216,14 +216,18 @@ def stdout2queue(session: Channel, q: queue.Queue, logger):
 
 
 def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
-    max_retries = 3
     retry_count = 0
 
-    while retry_count < max_retries:
+    conn = None
+    manager = None
+    finished = None
+
+    while not thread_stop_event.is_set():
         try:
             conn = Connection(host_name)
             conn.open()
             conn.client.get_transport().set_keepalive(30)
+            logger.info("Tunnel SSH opened.")
 
             finished = threading.Event()
             manager = TunnelManager(
@@ -236,33 +240,31 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
                 finished=finished,
             )
             manager.start()
-            try:
-                while not thread_stop_event.is_set():
-                    e = manager.exception()
-                    if e is None:
-                        time.sleep(0.5)
-                    else:
-                        if e.type is ThreadException:
-                            raise e.value
-                        else:
-                            raise ThreadException([e])
-            except Exception as e:
-                logger.error(f"Tunnel manager error: {str(e)}")
-                raise e
-            finally:
-                finished.set()
-                manager.join()
-                logger.info("Tunnel manager closed")
+            logger.info(
+                f"Tunnel {local_host}:{local_port} -> {remote_host}:{remote_port}"
+            )
+            while not thread_stop_event.is_set():
+                e = manager.exception()
+                if e is None:
+                    time.sleep(0.1)
+                else:
+                    logger.error("TunnelManager exception detected.")
+                    raise e
+            logger.info("Tunnel manager closed")
         except Exception as e:
-            logger.error(f"Tunnel Error: {e}")
-            if retry_count >= max_retries:
-                raise e
-            else:
-                logger.warning(f"Start retry: {retry_count}/{max_retries}")
-                retry_count += 1
-                time.sleep(1)
+            logger.error(f"Tunnel Error: {e}\n{e.__traceback__}")
+            logger.warning(f"Retrying ({retry_count})...")
+            retry_count += 1
+            time.sleep(1)
+        except SystemExit:
+            logger.warning("SystemExit detected.")
         finally:
-            conn.close()
+            if finished:
+                finished.set()
+            if manager:
+                manager.join()
+            if conn:
+                conn.close()
             logger.info("Tunnel SSH connection closed")
     return
 
@@ -499,48 +501,32 @@ def main():
     return
 
 
-def test():
+def test_tunnel():
     config = load_config()
-
-    conn = Connection(config.hostname)
-    conn.open()
-    session = conn.transport.open_session()
-    session.get_pty()
-    session.invoke_shell()
-
-    q = queue.Queue()
-    stream_thread = threading.Thread(
-        target=stdout2queue,
-        args=(
-            session,
-            q,
-            qsub_stdout_logger,
-        ),
-    )
-    stream_thread.start()
-
+    local_host = "localhost"
+    remote_host = "node1234"
+    if config.usetunnel:
+        logger.info("start tunnel thread...")
+        thread_tunnel = threading.Thread(
+            target=stream_tunnel,
+            args=(
+                config.hostname,
+                config.port,
+                config.port,
+                local_host,
+                remote_host,
+            ),
+        )
+        thread_tunnel.start()
     try:
-        for _ in range(5):
-            session.send("echo 'hello world!'" + "\n")
-            time.sleep(0.1)
-        session.send("echo 'last world!'" + "\n")
-        readwhile(q, lambda line: line.startswith("last"), verbose=False)
-        logger.info("+" * 30)
-        for _ in range(5):
-            session.send("echo 'hihi'" + "\n")
-            time.sleep(0.1)
-        session.send("echo 'last hi!'" + "\n")
-        readwhile(q, lambda line: line.startswith("last"), verbose=False)
-        logger.info("=" * 30)
-    except Exception as e:
-        logger.error(f"Error: {str(e)}. Traceback:\n{e.__traceback__}")
+        while True:
+            time.sleep(1)
+    except SystemExit:
+        pass
     finally:
         thread_stop_event.set()
-        stream_thread.join()
-        session.close()
-        conn.close()
-        logfile_stream.close()
-        logger.info("connection closed.")
+        thread_tunnel.join()
+    return
 
 
 if __name__ == "__main__":
