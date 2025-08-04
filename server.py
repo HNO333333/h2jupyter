@@ -1,5 +1,6 @@
 import os
 import queue
+import signal
 import sys
 import threading
 import time
@@ -10,15 +11,25 @@ from typing import Optional
 
 import yaml
 from fabric2 import Connection
+from fabric2.tunnels import TunnelManager
+from invoke.exceptions import ThreadException
 from loguru import logger as base
 from paramiko import Channel
 from pydantic import BaseModel, Field
-from tqdm import tqdm
 
 # --- global vars
 current_dir = os.path.dirname(os.path.abspath(__file__))
 thread_stop_event = threading.Event()
 remote_host = ""
+
+
+# --- signal capturing
+def exit_handler(signum, frame):
+    logger.info("Exiting...")
+    exit()
+
+
+signal.signal(signal.SIGINT, exit_handler)
 # --- logger setting
 base.remove()
 
@@ -145,6 +156,7 @@ class HPCServerConfig(BaseModel):
     )
     username: str = Field(default="", description="Username for the HPC server")
     sshlogs: bool = Field(default=False, description="Whether to enable SSH logging")
+    usetunnel: bool = Field(default=False, description="Whether to open SSH tunnel")
     # --- l options
     timeinhours: Optional[int] = Field(
         default=2, description="Time in hours for the job allocation"
@@ -204,25 +216,54 @@ def stdout2queue(session: Channel, q: queue.Queue, logger):
 
 
 def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
-    try:
-        conn = Connection(host_name)
-        conn.open()
-        logger.info(f"SSH connection to {host_name} established")
-        with conn.forward_local(
-            local_port=local_port, remote_host=remote_host, remote_port=remote_port
-        ):
-            logger.info(
-                f"Port forwarding established: {local_host}:{local_port} -> {remote_host}:{remote_port}"
+    max_retries = 3
+    retry_count = 0
+
+    while retry_count < max_retries:
+        try:
+            conn = Connection(host_name)
+            conn.open()
+            conn.client.get_transport().set_keepalive(30)
+
+            finished = threading.Event()
+            manager = TunnelManager(
+                local_port=local_port,
+                local_host=local_host,
+                remote_port=remote_port,
+                remote_host=remote_host,
+                # TODO: not a huge fan of handing in our transport, but...?
+                transport=conn.transport,
+                finished=finished,
             )
-            while not thread_stop_event.is_set():
-                time.sleep(0.2)
-        logger.info("Port forwarding closed")
-    except Exception as e:
-        logger.info(f"Tunnel Error: {e}")
-        raise e
-    finally:
-        conn.close()
-        logger.info("Tunnel connection closed")
+            manager.start()
+            try:
+                while not thread_stop_event.is_set():
+                    e = manager.exception()
+                    if e is None:
+                        time.sleep(0.5)
+                    else:
+                        if e.type is ThreadException:
+                            raise e.value
+                        else:
+                            raise ThreadException([e])
+            except Exception as e:
+                logger.error(f"Tunnel manager error: {str(e)}")
+                raise e
+            finally:
+                finished.set()
+                manager.join()
+                logger.info("Tunnel manager closed")
+        except Exception as e:
+            logger.error(f"Tunnel Error: {e}")
+            if retry_count >= max_retries:
+                raise e
+            else:
+                logger.warning(f"Start retry: {retry_count}/{max_retries}")
+                retry_count += 1
+                time.sleep(1)
+        finally:
+            conn.close()
+            logger.info("Tunnel SSH connection closed")
     return
 
 
@@ -418,28 +459,31 @@ def main():
 
         # --- open tunnel
         local_host = "localhost"
-        thread_tunnel = threading.Thread(
-            target=stream_tunnel,
-            args=(
-                config.hostname,
-                config.port,
-                config.port,
-                local_host,
-                remote_host,
-            ),
-        )
-        thread_tunnel.start()
+        if config.usetunnel:
+            logger.info("start tunnel thread...")
+            thread_tunnel = threading.Thread(
+                target=stream_tunnel,
+                args=(
+                    config.hostname,
+                    config.port,
+                    config.port,
+                    local_host,
+                    remote_host,
+                ),
+            )
+            thread_tunnel.start()
 
         # --- show count down
-        start_time = time.time()
-        for _ in tqdm(range(3600 * config.timeinhours, 0, -30)):
-            time.sleep(30)
-
-    except KeyboardInterrupt:
-        logger.error("User interrupted.")
+        for remaining in range(3600 * config.timeinhours, 0, -5):
+            sys.stdout.write(f"\r⏳ Time left: {remaining:2d} seconds")
+            sys.stdout.flush()
+            time.sleep(5)
 
     except Exception as e:
         logger.error(f"Error: {e}, {str(e.__traceback__)}")
+
+    except SystemExit:
+        logger.info("capture exit in main...")
 
     # --- close all sessions
     finally:
