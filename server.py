@@ -13,7 +13,6 @@ from typing import Optional
 import yaml
 from fabric2 import Connection
 from fabric2.tunnels import TunnelManager
-from invoke.exceptions import ThreadException
 from loguru import logger as base
 from paramiko import Channel
 from pydantic import BaseModel, Field
@@ -393,6 +392,7 @@ def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
     session.send("mkdir h2jupyter" + "\n")
     session.send("cd h2jupyter" + "\n")
     session.send("uv venv -p 3.11" + "\n")
+    time.sleep(2)
     pkgs = config.requirements.split("\n")
     pkgs.append("pyzmq<27")
     pkgs.append("jupyter_kernel_gateway")
