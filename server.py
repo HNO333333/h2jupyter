@@ -388,18 +388,39 @@ def check_hostname(session: Channel, q: queue.Queue):
 
 
 def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
+    """
+    Create a virtual environment and install dependencies
+    """
+
+    def _try_split_opt(pkg: str) -> tuple[list[str], str]:
+        """
+        --only-binary=:all: pyarrow
+        -> options: [--only-binary=:all:]
+        pkg_req: pyarrow
+        """
+        options = []
+        pkg_splits = pkg.split(" ")
+        pkg_req = pkg_splits[-1]
+        for split in pkg_splits[:-1]:
+            if split.startswith("-"):
+                options.append(split)
+        return options, pkg_req
+
     session.send(f"cd {config.directory}\n")
     session.send("mkdir h2jupyter" + "\n")
     session.send("cd h2jupyter" + "\n")
-    session.send("uv venv -p 3.11" + "\n")
-    time.sleep(2)
+    session.send("uv venv --allow-existing -p 3.11" + "\n")
+    time.sleep(0.5)
     pkgs = config.requirements.split("\n")
     pkgs.append("pyzmq<27")
     pkgs.append("jupyter_kernel_gateway")
     pkgs.append("ipykernel")
     pkgs = [pkg.strip() for pkg in pkgs if pkg.strip()]
     for pkg in pkgs:
-        session.send(f"uv pip install '{pkg}'\n")
+        options, pkg_req = _try_split_opt(pkg)
+        opt_str = " ".join(options)
+        session.send(f"uv pip install {opt_str} '{pkg_req}'" + "\n")
+        time.sleep(0.5)
     session.send("echo REQ_INSTALLED\n")
     readwhile(q, lambda line: line.startswith("REQ_INSTALLED"), timeout=1200)
 
