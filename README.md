@@ -1,3 +1,9 @@
+
+This repo is adapted from:
+1. https://github.com/rdauria/jupyter-notebook
+2. https://github.com/xingyaoww/code-act/blob/main/scripts/chat/code_execution/jupyter.py
+
+
 ## Usage
 
 1. **Set up SSH access**
@@ -22,6 +28,9 @@
 4. **Run the server**
    1. Start the application: `uv run server.py`
    2. The server will request a compute node, set up the environment, and start a Jupyter kernel gateway
+
+5. **Send Code to run on server**
+   1. interact with `jupyter_kernel.JupyterKernel`
 
 ## What does it do
 
