@@ -4,10 +4,10 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from copy import deepcopy
 from datetime import datetime
 from enum import Enum
-import traceback
 from typing import Optional
 
 import yaml
@@ -16,6 +16,12 @@ from fabric2.tunnels import TunnelManager
 from loguru import logger as base
 from paramiko import Channel
 from pydantic import BaseModel, Field
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 # --- global vars
 current_dir = os.path.curdir
@@ -406,7 +412,7 @@ def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
                 options.append(split)
         return options, pkg_req
 
-    session.send("cd $SCRATCH")
+    session.send("cd $SCRATCH" + "\n")
     session.send(f"mkdir {config.directory}" + "\n")
     session.send(f"cd {config.directory}" + "\n")
     session.send("uv venv --allow-existing -p 3.11" + "\n")
@@ -425,13 +431,35 @@ def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
     readwhile(q, lambda line: line.startswith("REQ_INSTALLED"), timeout=1200)
 
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, max=10),
+    reraise=True,
+    retry=retry_if_exception(TimeoutError),
+    before=lambda retry_state: logger.info(
+        f"Attempting connection (attempt {retry_state.attempt_number})"
+    ),
+    after=lambda retry_state: logger.info(
+        f"Connection attempt {retry_state.attempt_number} failed, used {retry_state.outcome_timestamp - retry_state.start_time:.2f}s since first retry"
+    ),
+)
+def open_connection_with_retry(conn: Connection):
+    """Open connection with retry logic using tenacity decorator."""
+    try:
+        conn.open()
+        conn.transport.set_keepalive(30)
+        logger.info("Connection established successfully")
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, stopping retry")
+        raise
+
+
 def main():
     global remote_host
     config: HPCServerConfig = load_config()
 
     conn = Connection(host=config.hostname)
-    conn.open()
-    conn.transport.set_keepalive(30)
+    open_connection_with_retry(conn)
 
     session_qsub, q_qsub = get_session_queue(conn)
 
@@ -518,34 +546,6 @@ def main():
         conn.close()
         logfile_stream.close()
         logger.info("all connection closed.")
-    return
-
-
-def test_tunnel():
-    config = load_config()
-    local_host = "localhost"
-    remote_host = "node1234"
-    if config.usetunnel:
-        logger.info("start tunnel thread...")
-        thread_tunnel = threading.Thread(
-            target=stream_tunnel,
-            args=(
-                config.hostname,
-                config.port,
-                config.port,
-                local_host,
-                remote_host,
-            ),
-        )
-        thread_tunnel.start()
-    try:
-        while True:
-            time.sleep(1)
-    except SystemExit:
-        pass
-    finally:
-        thread_stop_event.set()
-        thread_tunnel.join()
     return
 
 
