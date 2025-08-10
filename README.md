@@ -26,11 +26,11 @@ This repo is adapted from:
    2. Install dependencies: `uv sync`
 
 4. **Run the server**
-   1. Start the application: `uv run server.py`
+   1. Start the application: `uv run server`
    2. The server will request a compute node, set up the environment, and start a Jupyter kernel gateway
 
 5. **Send Code to run on server**
-   1. interact with `jupyter_kernel.JupyterKernel`
+   1. interact with `src.h2jupyter.kernel.JupyterKernel`
 
 ## What does it do
 

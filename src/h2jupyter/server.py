@@ -18,7 +18,7 @@ from paramiko import Channel
 from pydantic import BaseModel, Field
 
 # --- global vars
-current_dir = os.path.dirname(os.path.abspath(__file__))
+current_dir = os.path.curdir
 thread_stop_event = threading.Event()
 remote_host = ""
 

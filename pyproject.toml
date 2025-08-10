@@ -1,7 +1,7 @@
 [project]
 name = "h2jupyter"
 version = "0.1.0"
-description = "Add your description here"
+description = "A tool to run Jupyter kernels on HPC clusters"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,4 +11,17 @@ dependencies = [
     "pyyaml>=6.0.2",
     "scp>=0.15.0",
     "tornado>=6.5.1",
+]
+
+[project.scripts]
+server = "h2jupyter.server:main"
+tunnel = "h2jupyter.tunnel:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.30.0",
 ]

@@ -5,9 +5,9 @@ import sys
 import threading
 import time
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from server import exit_handler, load_config, logger, stream_tunnel, thread_stop_event
+from .server import exit_handler, load_config, logger, stream_tunnel, thread_stop_event
 
 signal.signal(signal.SIGINT, exit_handler)
 
