@@ -406,9 +406,9 @@ def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
                 options.append(split)
         return options, pkg_req
 
-    session.send(f"cd {config.directory}\n")
-    session.send("mkdir h2jupyter" + "\n")
-    session.send("cd h2jupyter" + "\n")
+    session.send("cd $SCRATCH")
+    session.send(f"mkdir {config.directory}" + "\n")
+    session.send(f"cd {config.directory}" + "\n")
     session.send("uv venv --allow-existing -p 3.11" + "\n")
     time.sleep(0.5)
     pkgs = config.requirements.split("\n")
@@ -469,10 +469,6 @@ def main():
         if env_activate_cmd:
             session_qsub.send(env_activate_cmd + "\n")
         check_uv_exists(session_qsub, q_qsub)
-
-        # --- open dir
-        session_qsub.send(f"cd {config.directory}" + "\n")
-        session_qsub.send(f"echo '{get_current_time_str()}' >> temp.txt" + "\n")
 
         # --- open dir & install requirements
         cd_create_venv(session_qsub, q_qsub, config)

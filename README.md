@@ -18,7 +18,7 @@ This repo is adapted from:
       - Adjust resource requirements (time, memory, CPU architecture) as needed
       - Configure Python version and other modules to load
       - Set GPU options if required
-      - Update the `directory` where the application will run `<directory>/h2jupyter` (defaults to `$SCRATCH`)
+      - Update the `directory` where the application will run (defaults to `$SCRATCH`, if specified: `$SCRATCH/<directory>`)
       - Add any additional Python packages to the `requirements` section
 
 3. **Set up the Python environment**

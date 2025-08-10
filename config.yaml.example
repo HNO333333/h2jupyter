@@ -30,7 +30,7 @@ cudanum: 1
 cve: ""
 pve: ""
 port: 8789
-directory: $SCRATCH
+directory: h2jupyter # will run under dir: $SCRATCH/h2jupyter
 requirements: |-
     scikit-learn
     numpy
