@@ -205,6 +205,13 @@ class HPCServerConfig(BaseModel):
     port: int = Field(default=8789, description="Port number for the server")
     directory: str = Field(default="$SCRATCH", description="Working directory path")
     requirements: str = Field(default="", description="venv requirements")
+    use_apptainer_ubuntu: bool = Field(
+        default=False, description="Use Apptainer Ubuntu"
+    )
+    need_pip_install: bool = Field(
+        default=True,
+        description="If this directory already has all packages installed, set this to False",
+    )
 
 
 def stdout2queue(session: Channel, q: queue.Queue, logger):
@@ -318,6 +325,8 @@ def get_module_load_cmds(config: HPCServerConfig):
         mod_list = config.mods.split(",")
         for mod in mod_list:
             out.append(f"module load {mod}")
+    if config.use_apptainer_ubuntu:
+        out.append("module load apptainer")
 
     # --- python & gcc
     out.append(f"module load {config.gccver}")
@@ -415,18 +424,24 @@ def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
     session.send("cd $SCRATCH" + "\n")
     session.send(f"mkdir {config.directory}" + "\n")
     session.send(f"cd {config.directory}" + "\n")
+    if config.use_apptainer_ubuntu:
+        session.send("apptainer run $H2_CONTAINER_LOC/ubuntu_22.04.sif" + "\n")
+    time.sleep(2)
     session.send("uv venv --allow-existing -p 3.11" + "\n")
     time.sleep(0.5)
-    pkgs = config.requirements.split("\n")
-    pkgs.append("pyzmq<27")
-    pkgs.append("jupyter_kernel_gateway")
-    pkgs.append("ipykernel")
-    pkgs = [pkg.strip() for pkg in pkgs if pkg.strip()]
-    for pkg in pkgs:
-        options, pkg_req = _try_split_opt(pkg)
-        opt_str = " ".join(options)
-        session.send(f"uv pip install {opt_str} '{pkg_req}'" + "\n")
-        time.sleep(0.5)
+    if config.need_pip_install:
+        pkgs = config.requirements.split("\n")
+        pkgs.append("pyzmq<27")
+        pkgs.append("jupyter_kernel_gateway")
+        pkgs.append("ipykernel")
+        pkgs = [pkg.strip() for pkg in pkgs if pkg.strip()]
+        for pkg in pkgs:
+            options, pkg_req = _try_split_opt(pkg)
+            opt_str = " ".join(options)
+            session.send(f"uv pip install {opt_str} '{pkg_req}'" + "\n")
+            time.sleep(0.5)
+    else:
+        logger.info("Assume packages already installed, skip installation")
     session.send("echo REQ_INSTALLED\n")
     readwhile(q, lambda line: line.startswith("REQ_INSTALLED"), timeout=1200)
 

@@ -35,3 +35,5 @@ requirements: |-
     scikit-learn
     numpy
     pandas
+use_apptainer_ubuntu: false
+need_pip_install: true
