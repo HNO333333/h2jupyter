@@ -93,7 +93,7 @@ def download(
     # Construct the full local path using forward slashes for Unix compatibility
     local_path = f"{local_base_dir.rstrip('/')}/{remote_name}"
     
-    remote_path = f"{remote_base_dir.rstrip('/')}/{remote_name}"
+    remote_path = f"{remote_base_dir.rstrip('/')}/{remote_rel_path.rstrip('/')}"
 
     # Establish connection
     ssh = Connection(hostname)
