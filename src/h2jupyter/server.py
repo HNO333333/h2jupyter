@@ -1,5 +1,6 @@
 import os
 import queue
+import re
 import signal
 import sys
 import threading
@@ -63,6 +64,12 @@ def get_current_time_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def clean_ansi_escape(s: str) -> str:
+    # ANSI escape sequences usually start with \x1b (ESC) followed by '[' and some characters ending with a letter
+    ansi_escape = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+    return ansi_escape.sub("", s)
+
+
 def get_session_queue(conn: Connection):
     session = conn.transport.open_session()
     session.get_pty()
@@ -82,8 +89,8 @@ def readwhile(q: queue.Queue, condition_func, timeout=10, verbose=False):
             data: str = q.get(timeout=0.1)
             for line in data.split("\n"):
                 if verbose:
-                    logger.info(line)
-                if condition_func(line):
+                    logger.info(repr(line.strip()))
+                if condition_func(line.strip()):
                     flag = True
                     break
             if flag:
@@ -222,6 +229,7 @@ def stdout2queue(session: Channel, q: queue.Queue, logger):
         if session.recv_ready():
             data = session.recv(1024).decode("utf-8")
             data = data.replace("\r\n\r\n", "\n")
+            data = clean_ansi_escape(data)
             q.put(data)
             logger.opt(raw=True).info(data + "\n")
             logfile_stream.write(data)
@@ -440,10 +448,13 @@ def cd_create_venv(session: Channel, q: queue.Queue, config: HPCServerConfig):
             opt_str = " ".join(options)
             session.send(f"uv pip install {opt_str} '{pkg_req}'" + "\n")
             time.sleep(0.5)
+        to = 1200
     else:
         logger.info("Assume packages already installed, skip installation")
-    session.send("echo REQ_INSTALLED\n")
-    readwhile(q, lambda line: line.startswith("REQ_INSTALLED"), timeout=1200)
+        to = 5
+    session.send("echo 'REQ_INSTALLED'\n")
+    time.sleep(2)
+    readwhile(q, lambda line: line.startswith("REQ_INSTALLED"), timeout=to)
 
 
 @retry(
