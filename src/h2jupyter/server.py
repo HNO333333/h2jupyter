@@ -248,7 +248,7 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
         try:
             conn = Connection(host_name)
             conn.open()
-            conn.client.get_transport().set_keepalive(10)
+            conn.client.get_transport().set_keepalive(30)
             logger.info("Tunnel SSH opened.")
 
             finished = threading.Event()
@@ -288,6 +288,11 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
                 manager.join()
             if conn:
                 conn.close()
+
+            conn = None
+            manager = None
+            finished = None
+
             logger.info("Tunnel SSH connection closed")
     return
 
