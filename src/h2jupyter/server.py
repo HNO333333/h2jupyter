@@ -28,6 +28,7 @@ from tenacity import (
 current_dir = os.path.curdir
 thread_stop_event = threading.Event()
 remote_host = ""
+avail_port = 8789
 
 
 # --- signal capturing
@@ -480,8 +481,27 @@ def open_connection_with_retry(conn: Connection):
         raise
 
 
+def get_available_port(session: Channel, q: queue.Queue) -> int:
+    cmd = 'for port in {8789..65535}; do\n    (echo >/dev/tcp/127.0.0.1/$port) &>/dev/null || { echo "$port"; break; }\ndone\necho PORT=$port'
+    session.send(cmd + "\n")
+
+    def get_port(line: str):
+        global avail_port
+        if line.startswith("PORT"):
+            avail_port = line.split("=")[1].strip()
+            avail_port = int(avail_port)
+            return True
+        else:
+            return False
+
+    readwhile(q, get_port, timeout=60)
+    logger.info(f"Available port: {avail_port}")
+    return
+
+
 def main():
     global remote_host
+    global avail_port
     config: HPCServerConfig = load_config()
 
     conn = Connection(host=config.hostname)
@@ -527,11 +547,15 @@ def main():
         # --- open dir & install requirements
         cd_create_venv(session_qsub, q_qsub, config)
 
+        # --- find available port
+        get_available_port(session_qsub, q_qsub)
+
         # --- start jupyter kernel gateway
         session_qsub.send(
-            f"uv run jupyter kernelgateway --KernelGatewayApp.ip=0.0.0.0 --KernelGatewayApp.port={config.port}"
+            f"uv run jupyter kernelgateway --KernelGatewayApp.ip=0.0.0.0 --KernelGatewayApp.port={avail_port}"
             + "\n"
         )
+        time.sleep(5)
 
         # --- open tunnel
         local_host = "localhost"
@@ -542,7 +566,7 @@ def main():
                 args=(
                     config.hostname,
                     config.port,
-                    config.port,
+                    avail_port,
                     local_host,
                     remote_host,
                 ),
