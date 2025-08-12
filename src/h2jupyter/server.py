@@ -311,12 +311,12 @@ def get_qrsh_cmd(config: HPCServerConfig):
 
     if config.highp:
         l_options = "highp," + l_options
-    if config.exclusive:
-        l_options = "exclusive," + l_options
 
-    l_options = f"h_rt={config.timeinhours}:00:00,h_data={config.memoryingb}G,arch={config.arch.value}"
+    l_options += f"h_rt={config.timeinhours}:00:00,h_data={config.memoryingb}G,arch={config.arch.value}"
     if config.usegpu:
         l_options += f",gpu,{config.gputype.value},cuda={config.cudanum}"
+    if config.exclusive:
+        l_options = l_options + "exclusive"
 
     qrsh_cmd = qrsh_template.format(l_options=l_options, pe_options=pe_options)
     return qrsh_cmd
