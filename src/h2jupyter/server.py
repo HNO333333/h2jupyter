@@ -248,7 +248,7 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
         try:
             conn = Connection(host_name)
             conn.open()
-            conn.client.get_transport().set_keepalive(30)
+            conn.transport.set_keepalive(30)
             logger.info("Tunnel SSH opened.")
 
             finished = threading.Event()
