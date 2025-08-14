@@ -257,7 +257,6 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
                 local_host=local_host,
                 remote_port=remote_port,
                 remote_host=remote_host,
-                # TODO: not a huge fan of handing in our transport, but...?
                 transport=conn.transport,
                 finished=finished,
             )
