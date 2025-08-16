@@ -277,7 +277,6 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
             logger.error(f"Tunnel Error: {e}\n{traceback.format_exc()}")
             logger.warning(f"Retrying ({retry_count})...")
             retry_count += 1
-            time.sleep(1)
         except SystemExit:
             logger.warning("SystemExit detected.")
         finally:
@@ -287,12 +286,11 @@ def stream_tunnel(host_name, local_port, remote_port, local_host, remote_host):
                 manager.join()
             if conn:
                 conn.close()
-
             conn = None
             manager = None
             finished = None
-
             logger.info("Tunnel SSH connection closed")
+            time.sleep(2)
     return
 
 
